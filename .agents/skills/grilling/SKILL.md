@@ -3,10 +3,14 @@ name: grilling
 description: Grill the user relentlessly about a plan, decision, or idea. Use when the user wants to stress-test their thinking, or uses any 'grill' trigger phrases.
 ---
 
-Interview me relentlessly about every aspect of this until we reach a shared understanding. Walk down each branch of the decision tree, resolving dependencies between decisions one-by-one. For each question, provide your recommended answer.
+Interview the user relentlessly about every aspect of this until you reach a shared understanding. Map it as a **design tree**: every decision branches into the decisions hanging off it.
 
-Ask the questions one at a time, waiting for feedback on each question before continuing. Asking multiple questions at once is bewildering.
+Ask in rounds, one topic per round — the tree decides how many questions that is, sometimes one, sometimes six.
 
-If a _fact_ can be found by exploring the environment (filesystem, tools, etc.), look it up rather than asking me. The _decisions_, though, are mine — put each one to me and wait for my answer.
+A question is **ready** when every decision it depends on is settled; anything hanging off a still-open question waits for a later round. Among the ready questions, ask the group that shares a frame — facets of one decision, the same part of the system — and that shapes the most of what is left, so the answers prune whole branches. The test for a group: can the user answer all of it holding a single picture in their head? Never pad a round to look like a batch, or stretch one across topics to save a turn.
 
-Do not act on it until I confirm we have reached a shared understanding.
+Name the topic, number the questions, and give your recommended answer for each. Every answer reshapes the tree, so recompute before choosing the next round. If the user asks for a different rhythm — one at a time, everything at once — do that instead.
+
+Finding _facts_ is your job (filesystem, tools, docs): look them up rather than asking. Dispatch a sub-agent and don't block — a pending lookup is just an unsettled dependency, so ask another ready topic meanwhile. The _decisions_ are the user's; put each to them and wait.
+
+Stop when every branch has been walked and nothing is silently assumed. Do not act on it until the user confirms you have reached a shared understanding.
