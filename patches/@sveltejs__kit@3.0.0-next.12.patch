@@ -1,0 +1,15 @@
+diff --git a/src/exports/vite/utils.js b/src/exports/vite/utils.js
+index 37a201aa402b8416fe8d7119b4e93fb4abedb96f..1f81789cfa2d09392e4f5336a4ac46b70a753ca6 100644
+--- a/src/exports/vite/utils.js
++++ b/src/exports/vite/utils.js
+@@ -141,7 +141,9 @@ export function normalize_id(id, aliases, cwd) {
+ 	return posixify(id);
+ }
+ 
+-export const remote_module_pattern = /[/.]remote(\.[^/]+)+$/;
++// PATCH: don't treat dependency files that happen to be named `remote.js`
++// (e.g. jose/dist/webapi/jwks/remote.js) as remote function modules.
++export const remote_module_pattern = /^(?!.*[/\\]node_modules[/\\])(?:.*)[/.]remote(\.[^/]+)+$/;
+ export const server_only_module_pattern = /[/.]server(\.[^/]+)+$/;
+ export const server_only_directory_pattern = /\/server\//;
+ 
