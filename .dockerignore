@@ -1,0 +1,11 @@
+*
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!.npmrc
+!patches
+!vite.config.ts
+!tsconfig.json
+!components.json
+!src
+!static
