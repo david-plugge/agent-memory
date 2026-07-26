@@ -20,7 +20,7 @@ const config = {
 	],
 	tailwindStylesheet: './src/routes/layout.css',
 
-	importOrder: ['^\\$env/(.*)$', '^\\$app/(.*)$', '^\\$lib/(.*)$', '^[./]'],
+	importOrder: ['^\\$env/(.*)$', '^\\$app/(.*)$', '^\\#lib/(.*)$', '^[./]'],
 	importOrderSeparation: true,
 	importOrderSortSpecifiers: true
 };
