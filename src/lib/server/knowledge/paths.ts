@@ -29,7 +29,11 @@ export function assertValidPath(path: string): string {
 	return path;
 }
 
-/** A prefix is a path that need not be a full document path, so depth alone is not a constraint. */
+/**
+ * A browse prefix obeys the same grammar as a path — every prefix of a legal path is one. It is a
+ * distinct name because a prefix names a *place* in the tree rather than a document: nothing need
+ * exist at it.
+ */
 export function assertValidPathPrefix(prefix: string): string {
 	return assertValidPath(prefix);
 }

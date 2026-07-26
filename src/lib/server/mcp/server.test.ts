@@ -23,7 +23,7 @@ const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error('DATABASE_URL is not set; run `pnpm db:start` and check .env');
 
 const sql = postgres(databaseUrl);
-const db = drizzle(sql, { schema }) as unknown as KnowledgeDb;
+const db: KnowledgeDb = drizzle(sql, { schema });
 
 let handler: McpHttpHandler;
 let client: Client;
