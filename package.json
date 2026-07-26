@@ -20,7 +20,9 @@
 		"db:generate": "drizzle-kit generate",
 		"db:migrate": "drizzle-kit migrate",
 		"db:studio": "drizzle-kit studio",
-		"auth:schema": "better-auth generate --config src/lib/server/auth.ts --output src/lib/server/db/auth.schema.ts --yes"
+		"auth:schema": "better-auth generate --config src/lib/server/auth.ts --output src/lib/server/db/auth.schema.ts --yes",
+		"test:unit": "vitest",
+		"test": "npm run test:unit -- --run"
 	},
 	"devDependencies": {
 		"@commitlint/cli": "^21.2.1",
@@ -29,12 +31,14 @@
 		"@eslint/js": "^10.0.1",
 		"@fontsource-variable/inter": "^5.3.0",
 		"@lucide/svelte": "^1.26.0",
+		"@modelcontextprotocol/client": "2.0.0-beta.5",
 		"@sveltejs/adapter-node": "next",
 		"@sveltejs/kit": "next",
 		"@sveltejs/vite-plugin-svelte": "^7.1.2",
 		"@tailwindcss/vite": "^4.3.0",
 		"@trivago/prettier-plugin-sort-imports": "^6.0.2",
 		"@types/node": "^24",
+		"@vitest/browser-playwright": "^4.1.8",
 		"auth": "^1.6.23",
 		"better-auth": "^1.6.23",
 		"clsx": "^2.1.1",
@@ -46,6 +50,7 @@
 		"globals": "^17.6.0",
 		"husky": "^9.1.7",
 		"lint-staged": "^17.2.0",
+		"playwright": "^1.60.0",
 		"postgres": "^3.4.9",
 		"prettier": "^3.8.3",
 		"prettier-plugin-svelte": "^4.1.0",
@@ -60,7 +65,12 @@
 		"typescript": "^6.0.3",
 		"typescript-eslint": "^8.60.1",
 		"vite": "^8.0.16",
+		"vitest": "^4.1.8",
+		"vitest-browser-svelte": "^2.1.1",
 		"zod": "^4.4.3"
 	},
-	"packageManager": "pnpm@11.17.0+sha512.cca3cea332ad254bb84145f966d19f4879615210346fc92c79a047f23a0d7b3cca3c3792f0076ba1f1831d277efbcf0a9119b31a9a60eca7fb3d6231f331ef72"
+	"packageManager": "pnpm@11.17.0+sha512.cca3cea332ad254bb84145f966d19f4879615210346fc92c79a047f23a0d7b3cca3c3792f0076ba1f1831d277efbcf0a9119b31a9a60eca7fb3d6231f331ef72",
+	"dependencies": {
+		"@modelcontextprotocol/server": "2.0.0-beta.5"
+	}
 }
