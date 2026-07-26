@@ -1,0 +1,25 @@
+// Project uses prettier + eslint. The `oxc` extension's oxlint/oxfmt
+// language servers are disabled so they don't compete with them.
+//
+// The global "language_servers" covers most languages. JavaScript,
+// TypeScript, TSX and Svelte ship their own per-language default list
+// (which ends in "..." and would re-enable oxlint/oxfmt), so those four
+// are repeated below, preserving their defaults.
+{
+	"formatter": [{ "code_action": "source.fixAll.eslint" }, "prettier"],
+	"language_servers": ["!oxlint", "!oxfmt", "..."],
+	"languages": {
+		"JavaScript": {
+			"language_servers": ["!oxlint", "!oxfmt", "!typescript-language-server", "vtsls", "..."]
+		},
+		"TypeScript": {
+			"language_servers": ["!oxlint", "!oxfmt", "!typescript-language-server", "vtsls", "..."]
+		},
+		"TSX": {
+			"language_servers": ["!oxlint", "!oxfmt", "!typescript-language-server", "vtsls", "..."]
+		},
+		"Svelte": {
+			"language_servers": ["!oxlint", "!oxfmt", "svelte-language-server", "..."]
+		}
+	}
+}
