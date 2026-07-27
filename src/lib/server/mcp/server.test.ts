@@ -2,11 +2,18 @@
  * The contract tests: a real MCP client talking to the production handler in process, against a real
  * PostgreSQL database. Nothing is stubbed, so these exercise protocol negotiation, tool discovery,
  * schema validation, the SQL, and the rendered text an agent actually reads.
+ *
+ * The database is a throwaway container, not the developer's own: `beforeEach` truncates, and pointing
+ * that at the running knowledge service would delete a corpus that is in real use.
  */
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import type { McpHttpHandler } from '@modelcontextprotocol/server';
 import { createMcpHandler } from '@modelcontextprotocol/server';
+import type { StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { PostgreSqlContainer } from '@testcontainers/postgresql';
+import { generateDrizzleJson, generateMigration } from 'drizzle-kit/api';
 import { drizzle } from 'drizzle-orm/postgres-js';
+import type { Sql } from 'postgres';
 import postgres from 'postgres';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -16,19 +23,22 @@ import { knowledgeServerFactory } from './server';
 
 const CLIENT_NAME = 'claude-code';
 
-// Read straight from `.env` rather than through `$app/env/private`, which validates every variable the
-// app needs at runtime; these tests only need the database.
-process.loadEnvFile();
-const databaseUrl = process.env.DATABASE_URL;
-if (!databaseUrl) throw new Error('DATABASE_URL is not set; run `pnpm db:start` and check .env');
-
-const sql = postgres(databaseUrl);
-const db: KnowledgeDb = drizzle(sql, { schema });
-
+let container: StartedPostgreSqlContainer;
+let sql: Sql;
+let db: KnowledgeDb;
 let handler: McpHttpHandler;
 let client: Client;
 
+// Pulling and booting PostgreSQL takes far longer than a test does. The schema is diffed out of the
+// Drizzle definitions against an empty database, which is what `pnpm db:push` does in development —
+// so there is no migration folder to keep in step, and no drift between the tests and the app.
 beforeAll(async () => {
+	container = await new PostgreSqlContainer('postgres:18-alpine').start();
+	sql = postgres(container.getConnectionUri());
+	db = drizzle(sql, { schema });
+	const ddl = await generateMigration(generateDrizzleJson({}), generateDrizzleJson(schema));
+	for (const statement of ddl) await sql.unsafe(statement);
+
 	handler = createMcpHandler(knowledgeServerFactory(db));
 	// Newest-era discovery with conservative fallback. It is also what puts the client's identity on
 	// every request, which is what `author_actor` is derived from.
@@ -41,12 +51,13 @@ beforeAll(async () => {
 			fetch: (url, init) => handler.fetch(new Request(url, init))
 		})
 	);
-});
+}, 180_000);
 
 afterAll(async () => {
 	await client.close();
 	await handler.close();
 	await sql.end();
+	await container.stop();
 });
 
 beforeEach(async () => {
