@@ -11,5 +11,16 @@
 		"sourceMap": true,
 		"strict": true,
 		"moduleResolution": "bundler"
-	}
+	},
+	// Without this, TypeScript defaults to every file under the project root — and `checkJs` then
+	// type-checks the adapter's minified output in `build/`. Keep `.svelte-kit/types` in the list:
+	// that is where the generated `$types` live.
+	"include": [
+		"src/**/*.js",
+		"src/**/*.ts",
+		"src/**/*.svelte",
+		".svelte-kit/types/**/*.d.ts",
+		"*.config.js",
+		"*.config.ts"
+	]
 }
