@@ -25,15 +25,18 @@ function day(date: Date): string {
 }
 
 /** A leaf: title, summary and tier — this is the level where the choice is actually made. */
-function renderLeaf(label: string, descriptor: Descriptor): string {
-	return `${label} — ${descriptor.title}\n    ${descriptor.summary}\n    ${badges(descriptor, [`updated ${day(descriptor.updatedAt)}`])}`;
+function renderLeaf(label: string, descriptor: Descriptor, extra: string[] = []): string {
+	return `${label} — ${descriptor.title}\n    ${descriptor.summary}\n    ${badges(descriptor, [`updated ${day(descriptor.updatedAt)}`, ...extra])}`;
 }
 
 function renderNode(node: ListingNode): string {
 	// An intermediate node gets a bare segment and a descendant count. Nothing more: borrowing titles
 	// from the documents beneath it costs more context than dumping the entire corpus.
 	if (node.kind === 'segment') return `${node.segment}/ (${node.documentCount})`;
-	return renderLeaf(node.segment, node.descriptor);
+	// A document that is also a branch keeps one line and earns a `below` badge, so the agent can see
+	// it is both readable and descendable without a second call.
+	const extra = node.descendantCount > 0 ? [`${node.descendantCount} below`] : [];
+	return renderLeaf(node.segment, node.descriptor, extra);
 }
 
 export function renderFind(result: FindResult): string {
@@ -46,14 +49,24 @@ export function renderFind(result: FindResult): string {
 		return result.hits.map((hit) => renderLeaf(hit.path, hit)).join('\n');
 	}
 
+	// A document at exactly the browsed prefix describes the level, so it *is* the header — the agent
+	// that descended on a `below` badge reads it here rather than spending another call.
+	const header =
+		result.self !== undefined
+			? renderLeaf(result.prefix, result.self)
+			: result.prefix === ''
+				? ''
+				: `${result.prefix}/`;
+
 	const where = result.prefix === '' ? 'the top of the tree' : `'${result.prefix}'`;
-	if (result.nodes.length === 0)
+	if (result.nodes.length === 0) {
+		if (result.self !== undefined) return `${header}\nNothing below it.`;
 		return [
 			`Nothing under ${where}.`,
 			'Browse a shorter path_prefix, or search with a query. Add status to see drafts or deprecated documents.'
 		].join('\n');
-	const header = result.prefix === '' ? '' : `${result.prefix}/\n`;
-	return header + result.nodes.map(renderNode).join('\n');
+	}
+	return (header === '' ? '' : `${header}\n`) + result.nodes.map(renderNode).join('\n');
 }
 
 export function renderDocument(document: DocumentDetail): string {

@@ -179,6 +179,49 @@ describe('find_documents', () => {
 		expect(level).toContain('unverified');
 	});
 
+	// A path is legal both as a document and as a branch: the grammar reserves no segment, so nothing
+	// stops `stack/drizzle` being written alongside `stack/drizzle/push-workflow`.
+	const drizzleOverview = {
+		path: 'stack/drizzle',
+		title: 'Drizzle in this repo',
+		summary: 'Where the schema lives, and which workflow to reach for when changing it.',
+		body: '# Drizzle'
+	};
+
+	it('keeps a document that is also a branch as one node carrying both', async () => {
+		await ok('write_document', drizzleOverview);
+
+		const level = await ok('find_documents', { path_prefix: 'stack' });
+		// One node, not two: the descriptor and the subtree arrive on the same line.
+		expect(level).toContain(drizzleOverview.title);
+		expect(level).toContain('2 below');
+		expect(level).not.toContain('drizzle/ (2)');
+		expect(level.split('\n').filter((line) => line.startsWith('drizzle'))).toHaveLength(1);
+	});
+
+	it('shows the document at exactly the browsed prefix as the level’s header', async () => {
+		await ok('write_document', drizzleOverview);
+
+		const level = await ok('find_documents', { path_prefix: 'stack/drizzle' });
+		expect(level.split('\n')[0]).toBe(`stack/drizzle — ${drizzleOverview.title}`);
+		expect(level).toContain(drizzleOverview.summary);
+		// And the children are still listed beneath it.
+		expect(level).toContain(migrationWorkflow.title);
+		expect(level).toContain(pushWorkflow.title);
+	});
+
+	it('counts descendants in SQL, so a count survives past the listing limit', async () => {
+		for (let index = 0; index < 12; index++)
+			await ok('write_document', {
+				path: `stack/drizzle/note-${String(index).padStart(2, '0')}`,
+				title: `Drizzle note ${index}`,
+				summary: `Filler document number ${index} to push the subtree past the listing limit.`,
+				body: '# Note'
+			});
+		// 14 documents under `stack`, well past the 10 the level itself would return.
+		expect(await ok('find_documents', { path_prefix: 'stack' })).toContain('drizzle/ (14)');
+	});
+
 	it('flattens the subtree when asked recursively', async () => {
 		const flat = await ok('find_documents', { path_prefix: 'stack', recursive: true });
 		expect(flat).toContain(migrationWorkflow.path);
