@@ -328,6 +328,45 @@ describe('find_documents', () => {
 		).toContain('Relations, unfinished');
 	});
 
+	// The root skeleton exists because an agent may only ever search, and the server instructions are a
+	// channel with evidence of going undelivered. A tool result is not.
+	it('appends the top level to a search that hit, and to one that missed', async () => {
+		const hits = await ok('find_documents', { query: 'drizzle migration workflow' });
+		expect(hits).toContain('Top of the tree: practice/ (1)  stack/ (2)');
+		expect(hits).toContain('browse a branch with path_prefix');
+
+		expect(await ok('find_documents', { query: 'kubernetes ingress terraform' })).toContain(
+			'Top of the tree: practice/ (1)  stack/ (2)'
+		);
+	});
+
+	it('appends the top level to an empty browse, but never to one that found something', async () => {
+		expect(await ok('find_documents', { path_prefix: 'stack/prisma' })).toContain(
+			'Top of the tree:'
+		);
+		// A caller looking at the tree has better information than the root already.
+		expect(await ok('find_documents')).not.toContain('Top of the tree:');
+		expect(await ok('find_documents', { path_prefix: 'stack' })).not.toContain('Top of the tree:');
+	});
+
+	it('marks a top-level segment that is a readable document, and honours status', async () => {
+		await ok('write_document', {
+			path: 'practice',
+			title: 'How this team works',
+			summary: 'The index of practice documents: wayfinding, reviews, and the rest.',
+			body: '# Practice'
+		});
+		// No trailing slash, because the segment itself is readable; the count includes it.
+		expect(await ok('find_documents', { query: 'drizzle' })).toContain('practice (2)  stack/ (2)');
+
+		await ok('write_document', { ...pushWorkflow, path: 'archive/old-note', status: 'deprecated' });
+		const stableOnly = await ok('find_documents', { query: 'drizzle' });
+		expect(stableOnly).not.toContain('archive');
+		expect(await ok('find_documents', { query: 'drizzle', status: ['deprecated'] })).toContain(
+			'archive/ (1)'
+		);
+	});
+
 	it('rejects a limit, which is no longer part of the contract', async () => {
 		expect((await call('find_documents', { limit: 10 })).isError).toBe(true);
 	});

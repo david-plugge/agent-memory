@@ -52,10 +52,17 @@ export type ListingNode = {
 	hiddenCount: number;
 };
 
-export type FindResult =
+/** One top-level segment of the root skeleton: a name and how many documents live under it. */
+export type RootSegment = { segment: string; isDocument: boolean; documentCount: number };
+
+export type FindResult = (
 	| { kind: 'hits'; hits: Descriptor[] }
 	/** `self` is the document at exactly the browsed prefix, when one exists: the level describing itself. */
-	| { kind: 'listing'; prefix: string; nodes: ListingNode[]; self?: Descriptor };
+	| { kind: 'listing'; prefix: string; nodes: ListingNode[]; self?: Descriptor }
+) & {
+	/** The one-level bootstrap tree, present only on results that did not browse the tree themselves. */
+	root?: RootSegment[];
+};
 
 export type DocumentDetail = Descriptor & {
 	revisionNumber: number;
@@ -173,6 +180,31 @@ function boundedDepth(depth: number | undefined): number {
 	return depth;
 }
 
+/**
+ * The whole corpus at one level: top-level names with descendant counts, no descriptors. It rides on
+ * every result that did not browse, because the server instructions are a channel with evidence of
+ * being dropped while a tool *result* cannot be — so the only reliable place to tell an agent the tree
+ * exists is the call it actually makes.
+ */
+async function rootSkeleton(
+	db: KnowledgeDb,
+	current: CurrentRevision,
+	status: DocumentStatus[] | undefined
+): Promise<RootSegment[]> {
+	const segment = sql<string>`split_part(${current.path}, '/', 1)`;
+	return db
+		.with(current)
+		.select({
+			segment: segment.as('segment'),
+			isDocument: sql<boolean>`bool_or(${current.path} = ${segment})`.as('is_document'),
+			documentCount: sql<number>`count(*)::int`.as('document_count')
+		})
+		.from(current)
+		.where(statusFilter(current, status))
+		.groupBy(segment)
+		.orderBy(segment);
+}
+
 export type WriteInput = {
 	path: string;
 	title: string;
@@ -278,7 +310,8 @@ export async function findDocuments(db: KnowledgeDb, input: FindInput): Promise<
 				)
 			)
 			.orderBy(desc(sql`ts_rank_cd(${current.search}, ${tsquery}, 32)`), current.path);
-		return { kind: 'hits', hits };
+		// A searcher never saw the tree, whether the search hit or missed.
+		return { kind: 'hits', hits, root: await rootSkeleton(db, current, input.status) };
 	}
 
 	// The browse, in three queries: the immediate level with its descriptors, the bare names between
@@ -345,7 +378,16 @@ export async function findDocuments(db: KnowledgeDb, input: FindInput): Promise<
 	for (const row of innerRows) nodeAt(roots, relative(row.path)).isDocument = true;
 	for (const row of boundaryRows) nodeAt(roots, relative(row.path)).hiddenCount = row.documentCount;
 
-	return { kind: 'listing', prefix: prefix ?? '', nodes: settleNodes(roots), self };
+	// A browse that found nothing is the other place the tree is worth handing over: the caller guessed a
+	// prefix that holds none, so the top level is strictly better information than what they asked for.
+	// A browse that *did* find something needs no skeleton — it is looking at the tree already.
+	const nodes = settleNodes(roots);
+	const root =
+		nodes.length === 0 && self === undefined
+			? await rootSkeleton(db, current, input.status)
+			: undefined;
+
+	return { kind: 'listing', prefix: prefix ?? '', nodes, self, root };
 }
 
 type MutableNode = Omit<ListingNode, 'children'> & { children: Map<string, MutableNode> };
