@@ -3,7 +3,9 @@ services:
     image: postgres
     restart: always
     ports:
-      - 5432:5432
+      # 5433 on the host so this database can run alongside other local
+      # projects that bind the default 5432 (e.g. hunga).
+      - 5433:5432
     environment:
       POSTGRES_USER: root
       POSTGRES_PASSWORD: mysecretpassword
