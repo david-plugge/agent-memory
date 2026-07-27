@@ -11,6 +11,7 @@ import type {
 	FindResult,
 	ListingNode,
 	ReviewOutcome,
+	RootSegment,
 	WriteOutcome
 } from './store';
 
@@ -49,7 +50,20 @@ function renderNode(node: ListingNode, indent: string): string[] {
 	return [head, ...node.children.flatMap((child) => renderNode(child, `${indent}  `))];
 }
 
-export function renderFind(result: FindResult): string {
+/**
+ * The root skeleton, on one line: names and counts, no titles or summaries. This is the bootstrap tree
+ * an agent that only ever searched would otherwise never see, so it has to stay cheap enough to ride on
+ * every such result — two levels would cost roughly ten times as much, and one level is enough to say
+ * the tree exists and where to descend.
+ */
+function renderRoot(root: RootSegment[]): string {
+	const segments = root
+		.map((entry) => `${entry.segment}${entry.isDocument ? '' : '/'} (${entry.documentCount})`)
+		.join('  ');
+	return `Top of the tree: ${segments} — browse a branch with path_prefix.`;
+}
+
+function renderFindBody(result: FindResult): string {
 	if (result.kind === 'hits') {
 		if (result.hits.length === 0)
 			return [
@@ -78,6 +92,11 @@ export function renderFind(result: FindResult): string {
 	}
 	const body = result.nodes.flatMap((node) => renderNode(node, '')).join('\n');
 	return (header === '' ? '' : `${header}\n`) + body;
+}
+
+export function renderFind(result: FindResult): string {
+	const body = renderFindBody(result);
+	return result.root?.length ? `${body}\n\n${renderRoot(result.root)}` : body;
 }
 
 export function renderDocument(document: DocumentDetail): string {
