@@ -2,11 +2,18 @@
  * The contract tests: a real MCP client talking to the production handler in process, against a real
  * PostgreSQL database. Nothing is stubbed, so these exercise protocol negotiation, tool discovery,
  * schema validation, the SQL, and the rendered text an agent actually reads.
+ *
+ * The database is a throwaway container, not the developer's own: `beforeEach` truncates, and pointing
+ * that at the running knowledge service would delete a corpus that is in real use.
  */
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import type { McpHttpHandler } from '@modelcontextprotocol/server';
 import { createMcpHandler } from '@modelcontextprotocol/server';
+import type { StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { PostgreSqlContainer } from '@testcontainers/postgresql';
+import { generateDrizzleJson, generateMigration } from 'drizzle-kit/api';
 import { drizzle } from 'drizzle-orm/postgres-js';
+import type { Sql } from 'postgres';
 import postgres from 'postgres';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -16,19 +23,22 @@ import { knowledgeServerFactory } from './server';
 
 const CLIENT_NAME = 'claude-code';
 
-// Read straight from `.env` rather than through `$app/env/private`, which validates every variable the
-// app needs at runtime; these tests only need the database.
-process.loadEnvFile();
-const databaseUrl = process.env.DATABASE_URL;
-if (!databaseUrl) throw new Error('DATABASE_URL is not set; run `pnpm db:start` and check .env');
-
-const sql = postgres(databaseUrl);
-const db: KnowledgeDb = drizzle(sql, { schema });
-
+let container: StartedPostgreSqlContainer;
+let sql: Sql;
+let db: KnowledgeDb;
 let handler: McpHttpHandler;
 let client: Client;
 
+// Pulling and booting PostgreSQL takes far longer than a test does. The schema is diffed out of the
+// Drizzle definitions against an empty database, which is what `pnpm db:push` does in development —
+// so there is no migration folder to keep in step, and no drift between the tests and the app.
 beforeAll(async () => {
+	container = await new PostgreSqlContainer('postgres:18-alpine').start();
+	sql = postgres(container.getConnectionUri());
+	db = drizzle(sql, { schema });
+	const ddl = await generateMigration(generateDrizzleJson({}), generateDrizzleJson(schema));
+	for (const statement of ddl) await sql.unsafe(statement);
+
 	handler = createMcpHandler(knowledgeServerFactory(db));
 	// Newest-era discovery with conservative fallback. It is also what puts the client's identity on
 	// every request, which is what `author_actor` is derived from.
@@ -41,12 +51,13 @@ beforeAll(async () => {
 			fetch: (url, init) => handler.fetch(new Request(url, init))
 		})
 	);
-});
+}, 180_000);
 
 afterAll(async () => {
 	await client.close();
 	await handler.close();
 	await sql.end();
+	await container.stop();
 });
 
 beforeEach(async () => {
@@ -166,17 +177,47 @@ describe('find_documents', () => {
 		});
 	});
 
-	it('browses one level of the tree, with counts on intermediate nodes', async () => {
+	it('browses the subtree as a table of contents, expanded to the default depth', async () => {
 		const root = await ok('find_documents');
-		expect(root).toContain('stack/ (2)');
-		expect(root).toContain('practice/ (1)');
-		// No leaf detail at the root: an intermediate node is a bare segment and a count.
+		// Three levels, fully expanded: nothing is hidden inside the requested depth, so nothing is counted.
+		expect(root.split('\n')).toEqual([
+			'practice/',
+			'  wayfinding/',
+			'    mapping-an-effort',
+			'stack/',
+			'  drizzle/',
+			'    migration-workflow',
+			'    push-workflow'
+		]);
+		// Names only below the immediate level, and the immediate level here is bare segments.
 		expect(root).not.toContain(migrationWorkflow.title);
+	});
 
+	it('describes the immediate level and names everything below it', async () => {
 		const level = await ok('find_documents', { path_prefix: 'stack/drizzle' });
 		expect(level).toContain(migrationWorkflow.title);
-		expect(level).toContain(pushWorkflow.title);
+		expect(level).toContain(migrationWorkflow.summary);
 		expect(level).toContain('unverified');
+
+		// One level up, the same two documents are names: the descriptors stop at the level asked for.
+		const above = await ok('find_documents', { path_prefix: 'stack' });
+		expect(above).toContain('  migration-workflow');
+		expect(above).not.toContain(migrationWorkflow.title);
+	});
+
+	it('stops at the requested depth and counts what it hides', async () => {
+		const shallow = await ok('find_documents', { depth: 1 });
+		expect(shallow.split('\n')).toEqual(['practice/ (1)', 'stack/ (2)']);
+
+		// A level deeper the branch is expanded, so it carries no count of its own.
+		const two = await ok('find_documents', { depth: 2 });
+		expect(two).toContain('  drizzle/ (2)');
+		expect(two).not.toContain('stack/ (2)');
+	});
+
+	it('rejects a depth outside the schema bounds', async () => {
+		expect((await call('find_documents', { depth: 9 })).isError).toBe(true);
+		expect((await call('find_documents', { depth: 0 })).isError).toBe(true);
 	});
 
 	// A path is legal both as a document and as a branch: the grammar reserves no segment, so nothing
@@ -192,11 +233,26 @@ describe('find_documents', () => {
 		await ok('write_document', drizzleOverview);
 
 		const level = await ok('find_documents', { path_prefix: 'stack' });
-		// One node, not two: the descriptor and the subtree arrive on the same line.
+		// One node, not two: the descriptor and the subtree arrive under the same name.
 		expect(level).toContain(drizzleOverview.title);
-		expect(level).toContain('2 below');
-		expect(level).not.toContain('drizzle/ (2)');
+		expect(level).not.toContain('drizzle/');
 		expect(level.split('\n').filter((line) => line.startsWith('drizzle'))).toHaveLength(1);
+		expect(level).toContain('  migration-workflow');
+		// Expanded, so no count — the `below` badge is for a subtree the depth actually cuts off.
+		expect(level).not.toContain('2 below');
+		expect(await ok('find_documents', { path_prefix: 'stack', depth: 1 })).toContain('2 below');
+	});
+
+	it('renders a merged node past the boundary as a name and a count', async () => {
+		await ok('write_document', {
+			path: 'practice/wayfinding/mapping-an-effort/ticket-types',
+			title: 'The four wayfinder ticket types',
+			summary: 'Research, prototype, grilling and task, and which one a question wants.',
+			body: '# Ticket types'
+		});
+		// `mapping-an-effort` sits exactly on the default boundary and is both a document and a branch: no
+		// slash, because it is readable, plus the count of what lies past the boundary.
+		expect(await ok('find_documents')).toContain('    mapping-an-effort (1)');
 	});
 
 	it('shows the document at exactly the browsed prefix as the level’s header', async () => {
@@ -210,23 +266,23 @@ describe('find_documents', () => {
 		expect(level).toContain(pushWorkflow.title);
 	});
 
-	it('counts descendants in SQL, so a count survives past the listing limit', async () => {
+	it('counts in SQL and returns every node, with no limit to truncate either', async () => {
 		for (let index = 0; index < 12; index++)
 			await ok('write_document', {
 				path: `stack/drizzle/note-${String(index).padStart(2, '0')}`,
 				title: `Drizzle note ${index}`,
-				summary: `Filler document number ${index} to push the subtree past the listing limit.`,
+				summary: `Filler document number ${index}, well past any limit the tool used to impose.`,
 				body: '# Note'
 			});
-		// 14 documents under `stack`, well past the 10 the level itself would return.
-		expect(await ok('find_documents', { path_prefix: 'stack' })).toContain('drizzle/ (14)');
-	});
-
-	it('flattens the subtree when asked recursively', async () => {
-		const flat = await ok('find_documents', { path_prefix: 'stack', recursive: true });
-		expect(flat).toContain(migrationWorkflow.path);
-		expect(flat).toContain(pushWorkflow.path);
-		expect(flat).not.toContain('drizzle/ (2)');
+		// 14 documents under `stack`: exact as a count at depth 1, and all present as names at depth 2.
+		expect(await ok('find_documents', { path_prefix: 'stack', depth: 1 })).toContain(
+			'drizzle/ (14)'
+		);
+		const names = await ok('find_documents', { path_prefix: 'stack', depth: 2 });
+		expect(names.split('\n').filter((line) => line.startsWith('  note-'))).toHaveLength(12);
+		// And a search returns all 14 hits rather than a first page of them.
+		const hits = await ok('find_documents', { query: 'drizzle' });
+		expect(hits.split('\n').filter((line) => line.startsWith('stack/drizzle/'))).toHaveLength(14);
 	});
 
 	it('searches paths, titles and summaries — never bodies', async () => {
@@ -272,10 +328,8 @@ describe('find_documents', () => {
 		).toContain('Relations, unfinished');
 	});
 
-	it('honours the limit and rejects one out of range', async () => {
-		const limited = await ok('find_documents', { path_prefix: 'stack/drizzle', limit: 1 });
-		expect(limited.split('\n').filter((line) => line.includes(' — '))).toHaveLength(1);
-		expect((await call('find_documents', { limit: 500 })).isError).toBe(true);
+	it('rejects a limit, which is no longer part of the contract', async () => {
+		expect((await call('find_documents', { limit: 10 })).isError).toBe(true);
 	});
 });
 

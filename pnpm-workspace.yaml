@@ -1,6 +1,11 @@
 allowBuilds:
   "@tailwindcss/oxide": true
+  # Testcontainers' transitive Docker plumbing. None of the three build steps is needed: the tests reach
+  # Docker over the local socket, so ssh2's optional native acceleration never runs.
+  cpu-features: false
   esbuild: true
+  protobufjs: false
+  ssh2: false
 
 overrides:
   chokidar: ^5.0.0

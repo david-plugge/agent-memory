@@ -15,8 +15,8 @@ import { KnowledgeError, agentActor, assertHumanActor } from '../knowledge/paths
 import { renderDocument, renderFind, renderReview, renderWrite } from '../knowledge/render';
 import type { KnowledgeDb } from '../knowledge/store';
 import {
-	DEFAULT_LIMIT,
-	MAX_LIMIT,
+	DEFAULT_DEPTH,
+	MAX_DEPTH,
 	MAX_SUMMARY,
 	MAX_TITLE,
 	findDocuments,
@@ -91,10 +91,10 @@ export function knowledgeServerFactory(db: KnowledgeDb): McpServerFactory {
 			'find_documents',
 			{
 				title: 'Find shared developer knowledge',
-				description: `Search shared developer knowledge for existing conventions, workflows, and prior decisions before implementing something. Covers paths, titles and summaries — not document bodies.
+				description: `Shared developer knowledge — conventions, workflows, and prior decisions — to check before implementing something. Covers paths, titles and summaries, not document bodies.
 
 Two ways to look:
-- Browse: pass path_prefix (omit it for the top of the tree) to see one level at a time. 'area/ (3)' is a branch with three documents beneath it; a leaf shows its title, summary and trust tier. Pass recursive to flatten the whole subtree instead.
+- Browse: pass path_prefix (omit it for the top of the tree) to get a table of contents: the subtree expanded ${DEFAULT_DEPTH} levels deep by default. Documents at the level you asked for carry their title, summary and trust tier; everything deeper is indented names. 'area/' is a branch with no document of its own; 'area/ (3)' is a branch past the depth you asked for, holding three documents — browse it or raise depth to see them.
 - Search: pass query. Phrase it as the process you are carrying out ("how do I add a column with drizzle"), not as your task's own nouns ("favourite recipes per user") — the knowledge is written about processes and stacks.
 
 Results are relevance-ordered and never ranked by trust; read the tiers yourself.`,
@@ -116,20 +116,14 @@ Results are relevance-ordered and never ranked by trust; read the tiers yourself
 						.max(3)
 						.optional()
 						.describe("Defaults to ['stable']. Pass ['draft'] or ['deprecated'] to see those too."),
-					recursive: z
-						.boolean()
-						.optional()
-						.describe(
-							'Browse the whole subtree flat instead of one level. Ignored when query is set.'
-						),
-					limit: z
+					depth: z
 						.number()
 						.int()
 						.min(1)
-						.max(MAX_LIMIT)
+						.max(MAX_DEPTH)
 						.optional()
 						.describe(
-							`Default ${DEFAULT_LIMIT}, max ${MAX_LIMIT}. Narrow your query instead of paging.`
+							`How many levels to expand, counted from the level you asked for. Default ${DEFAULT_DEPTH}, max ${MAX_DEPTH}. Ignored when query is set.`
 						)
 				}),
 				annotations: { readOnlyHint: true, idempotentHint: true }
@@ -141,8 +135,7 @@ Results are relevance-ordered and never ranked by trust; read the tiers yourself
 							pathPrefix: args.path_prefix,
 							query: args.query,
 							status: args.status,
-							recursive: args.recursive,
-							limit: args.limit
+							depth: args.depth
 						})
 					)
 				)
