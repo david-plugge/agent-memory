@@ -37,14 +37,20 @@ export type Descriptor = {
 };
 
 /**
- * One level of the path tree: either a document or an intermediate segment. A segment can be both —
- * the grammar reserves nothing, so `a/b` may be a document while `a/b/c` also exists. That document
- * plays the role OKF gives `index.md`: it describes the branch. So it stays one node, carrying its
- * descriptor plus the count of documents strictly beneath it.
+ * One node of the browsed subtree. A segment may be both a document and a branch — the grammar
+ * reserves nothing, so `a/b` may be a document while `a/b/c` also exists — and that needs no special
+ * case here: it is a node that happens to be a document and happens to have children.
  */
-export type ListingNode =
-	| { kind: 'document'; segment: string; descriptor: Descriptor; descendantCount: number }
-	| { kind: 'segment'; segment: string; path: string; documentCount: number };
+export type ListingNode = {
+	segment: string;
+	/** Set only at the immediate level. Deeper nodes are bare names: descriptors there cost more than they return. */
+	descriptor?: Descriptor;
+	/** False for a segment with no document of its own, which renders with a trailing slash. */
+	isDocument: boolean;
+	children: ListingNode[];
+	/** Documents strictly beneath, counted only at the depth boundary — everything above it is expanded. */
+	hiddenCount: number;
+};
 
 export type FindResult =
 	| { kind: 'hits'; hits: Descriptor[] }
@@ -61,8 +67,8 @@ export type DocumentDetail = Descriptor & {
 	sources: RevisionSource[];
 };
 
-export const DEFAULT_LIMIT = 10;
-export const MAX_LIMIT = 50;
+export const DEFAULT_DEPTH = 3;
+export const MAX_DEPTH = 5;
 export const MAX_TITLE = 200;
 export const MAX_SUMMARY = 500;
 
@@ -160,11 +166,11 @@ function prefixFilter(current: CurrentRevision, prefix: string | undefined) {
 	return or(like(current.path, `${prefix}/%`), eq(current.path, prefix));
 }
 
-function boundedLimit(limit: number | undefined): number {
-	if (limit === undefined) return DEFAULT_LIMIT;
-	if (!Number.isInteger(limit) || limit < 1 || limit > MAX_LIMIT)
-		throw new KnowledgeError(`limit: must be an integer between 1 and ${MAX_LIMIT}, got ${limit}`);
-	return limit;
+function boundedDepth(depth: number | undefined): number {
+	if (depth === undefined) return DEFAULT_DEPTH;
+	if (!Number.isInteger(depth) || depth < 1 || depth > MAX_DEPTH)
+		throw new KnowledgeError(`depth: must be an integer between 1 and ${MAX_DEPTH}, got ${depth}`);
+	return depth;
 }
 
 export type WriteInput = {
@@ -232,18 +238,18 @@ export type FindInput = {
 	pathPrefix?: string;
 	query?: string;
 	status?: DocumentStatus[];
-	limit?: number;
-	/** Flattens a prefix browse into every document beneath it, instead of one level of the tree. */
-	recursive?: boolean;
+	/** How many levels of the subtree a browse expands, counted from the immediate level. Ignored when `query` is set. */
+	depth?: number;
 };
 
 /**
- * Two retrieval shapes behind one tool. A `query` always returns flat ranked hits; a bare
- * `path_prefix` returns one level of the tree unless `recursive` is set. Ordering is relevance-based
- * and opaque to the caller, and never influenced by Trust Tier.
+ * Two retrieval shapes behind one tool. A browse — no `query` — returns the subtree expanded to
+ * `depth`: a table of contents, descriptors at the immediate level and bare names below it. A `query`
+ * returns flat ranked hits instead. Neither shape is capped: ordering is opaque to the caller and
+ * never influenced by Trust Tier.
  */
 export async function findDocuments(db: KnowledgeDb, input: FindInput): Promise<FindResult> {
-	const limit = boundedLimit(input.limit);
+	const depth = boundedDepth(input.depth);
 	const prefix =
 		input.pathPrefix === undefined ? undefined : assertValidPathPrefix(input.pathPrefix);
 	const query = input.query?.trim();
@@ -271,46 +277,25 @@ export async function findDocuments(db: KnowledgeDb, input: FindInput): Promise<
 					sql`${current.search} @@ ${tsquery}`
 				)
 			)
-			.orderBy(desc(sql`ts_rank_cd(${current.search}, ${tsquery}, 32)`), current.path)
-			.limit(limit);
+			.orderBy(desc(sql`ts_rank_cd(${current.search}, ${tsquery}, 32)`), current.path);
 		return { kind: 'hits', hits };
 	}
 
-	if (input.recursive) {
-		const descriptors = await db
-			.with(latestVerdict, trust, current)
-			.select(descriptorFields(current, trust))
-			.from(current)
-			.leftJoin(trust, eq(trust.revisionId, current.id))
-			.where(and(statusFilter(current, input.status), prefixFilter(current, prefix)))
-			.orderBy(current.path)
-			.limit(limit);
-		return {
-			kind: 'listing',
-			prefix: prefix ?? '',
-			// A flat listing names every path in full, so nothing is hidden beneath a node to count.
-			nodes: descriptors.map((descriptor) => ({
-				kind: 'document' as const,
-				segment: descriptor.path,
-				descriptor,
-				descendantCount: 0
-			}))
-		};
-	}
-
-	// One level of the tree, grouped in SQL rather than over a capped row fetch: a descendant count is
-	// a contract field, so a silently truncated one is worse than no count at all.
-	const depth = prefix === undefined ? 0 : prefix.split('/').length;
-	// The depth is inlined rather than bound: `split_part` and the comparison need a typed integer, and
-	// an untyped bind parameter arrives as text. Safe to inline — it is derived from a validated prefix.
-	const level = sql.raw(String(depth + 1));
-	const segmentAt = sql<string>`split_part(${current.path}, '/', ${level})`;
+	// The browse, in three queries: the immediate level with its descriptors, the bare names between
+	// that level and the depth boundary, and the counts of whatever the boundary hides. Grouping in SQL
+	// rather than over a fetched page keeps every count exact at any corpus size.
+	const base = prefix === undefined ? 0 : prefix.split('/').length;
+	// Both depths are inlined rather than bound: array slicing and the comparisons need typed integers,
+	// and an untyped bind parameter arrives as text. Safe to inline — they derive from a validated prefix
+	// and a range-checked `depth`.
+	const level = sql.raw(String(base + 1));
+	const boundary = sql.raw(String(base + depth));
 	const pathDepth = sql<number>`array_length(string_to_array(${current.path}, '/'), 1)`;
 	const atThisLevel = sql`${pathDepth} = ${level}`;
 	const scope = and(statusFilter(current, input.status), prefixFilter(current, prefix));
 
-	// The level's own documents, plus the document at exactly the prefix if there is one. It sorts
-	// first, being a proper prefix of everything else, and never occupies one of the `limit` slots.
+	// The level's own documents, plus the document at exactly the prefix if there is one — it sorts
+	// first, being a proper prefix of everything else.
 	const levelRows = await db
 		.with(latestVerdict, trust, current)
 		.select(descriptorFields(current, trust))
@@ -319,51 +304,77 @@ export async function findDocuments(db: KnowledgeDb, input: FindInput): Promise<
 		.where(
 			and(scope, prefix === undefined ? atThisLevel : or(eq(current.path, prefix), atThisLevel))
 		)
-		.orderBy(current.path)
-		.limit(limit + 1);
+		.orderBy(current.path);
 
-	// Descendants per segment, counted by PostgreSQL and so exact at any corpus size. A count needs no
-	// trust, so this one skips the review CTEs entirely.
-	const branchRows = await db
+	// Everything between the immediate level and the boundary, as paths only: below the immediate level a
+	// node is a bare name. A name needs no trust, so this query and the next skip the review CTEs.
+	const innerRows =
+		depth === 1
+			? []
+			: await db
+					.with(current)
+					.select({ path: current.path })
+					.from(current)
+					.where(and(scope, sql`${pathDepth} > ${level}`, sql`${pathDepth} <= ${boundary}`))
+					.orderBy(current.path);
+
+	// What the boundary hides, counted against the ancestor sitting on the boundary. Nothing above the
+	// boundary carries a count, because everything above it is expanded; this one is the only signal
+	// telling the agent whether descending is worth another call.
+	const boundaryPath = sql<string>`array_to_string((string_to_array(${current.path}, '/'))[1:${boundary}], '/')`;
+	const boundaryRows = await db
 		.with(current)
 		.select({
-			segment: segmentAt.as('segment'),
+			path: boundaryPath.as('boundary_path'),
 			documentCount: sql<number>`count(*)::int`.as('document_count')
 		})
 		.from(current)
-		.where(and(scope, sql`${pathDepth} > ${level}`))
-		.groupBy(segmentAt)
-		.orderBy(segmentAt)
-		.limit(limit);
+		.where(and(scope, sql`${pathDepth} > ${boundary}`))
+		.groupBy(boundaryPath);
 
 	const self = prefix === undefined ? undefined : levelRows.find((row) => row.path === prefix);
-	const descendants = new Map(branchRows.map((row) => [row.segment, row.documentCount]));
-	const nodes: ListingNode[] = [];
+	const roots = new Map<string, MutableNode>();
+	const relative = (path: string) => path.slice(prefix === undefined ? 0 : prefix.length + 1);
+
 	for (const descriptor of levelRows) {
 		if (descriptor === self) continue;
-		const segment = descriptor.path.slice(prefix === undefined ? 0 : prefix.length + 1);
-		nodes.push({
-			kind: 'document',
-			segment,
-			descriptor,
-			descendantCount: descendants.get(segment) ?? 0
-		});
-		descendants.delete(segment);
+		const node = nodeAt(roots, relative(descriptor.path));
+		node.isDocument = true;
+		node.descriptor = descriptor;
 	}
-	// Whatever is left has no document of its own: a bare segment plus a count. The segment is
-	// human-authored and legible by construction, and borrowing titles from below it costs context.
-	for (const [segment, documentCount] of descendants)
-		nodes.push({
-			kind: 'segment',
-			segment,
-			path: prefix === undefined ? segment : `${prefix}/${segment}`,
-			documentCount
-		});
-	nodes.sort((a, b) => a.segment.localeCompare(b.segment));
+	for (const row of innerRows) nodeAt(roots, relative(row.path)).isDocument = true;
+	for (const row of boundaryRows) nodeAt(roots, relative(row.path)).hiddenCount = row.documentCount;
 
-	// Each query returned the first `limit` of its own kind, so the first `limit` of the merge is the
-	// true first `limit` of the level.
-	return { kind: 'listing', prefix: prefix ?? '', nodes: nodes.slice(0, limit), self };
+	return { kind: 'listing', prefix: prefix ?? '', nodes: settleNodes(roots), self };
+}
+
+type MutableNode = Omit<ListingNode, 'children'> & { children: Map<string, MutableNode> };
+
+/**
+ * The node at a path relative to the browsed prefix, creating it and every missing ancestor on the way.
+ * Ancestors have to be creatable: a branch need not have a document of its own, and a document past the
+ * boundary can be the only reason its levels exist at all.
+ */
+function nodeAt(roots: Map<string, MutableNode>, path: string): MutableNode {
+	let siblings = roots;
+	let node!: MutableNode;
+	for (const segment of path.split('/')) {
+		let found = siblings.get(segment);
+		if (found === undefined) {
+			found = { segment, isDocument: false, children: new Map(), hiddenCount: 0 };
+			siblings.set(segment, found);
+		}
+		node = found;
+		siblings = found.children;
+	}
+	return node;
+}
+
+/** The mutable tree, turned into the contract shape: children as sorted arrays. */
+function settleNodes(siblings: Map<string, MutableNode>): ListingNode[] {
+	return [...siblings.values()]
+		.map((node) => ({ ...node, children: settleNodes(node.children) }))
+		.sort((a, b) => a.segment.localeCompare(b.segment));
 }
 
 /** Unknown paths fail loudly with the nearest prefix that does exist — a silent empty result teaches nothing. */

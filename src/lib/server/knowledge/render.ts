@@ -29,14 +29,24 @@ function renderLeaf(label: string, descriptor: Descriptor, extra: string[] = [])
 	return `${label} — ${descriptor.title}\n    ${descriptor.summary}\n    ${badges(descriptor, [`updated ${day(descriptor.updatedAt)}`, ...extra])}`;
 }
 
-function renderNode(node: ListingNode): string {
-	// An intermediate node gets a bare segment and a descendant count. Nothing more: borrowing titles
-	// from the documents beneath it costs more context than dumping the entire corpus.
-	if (node.kind === 'segment') return `${node.segment}/ (${node.documentCount})`;
-	// A document that is also a branch keeps one line and earns a `below` badge, so the agent can see
-	// it is both readable and descendable without a second call.
-	const extra = node.descendantCount > 0 ? [`${node.descendantCount} below`] : [];
-	return renderLeaf(node.segment, node.descriptor, extra);
+/**
+ * A node and its subtree. The immediate level carries descriptors, so it renders as a leaf block;
+ * everything below it is a bare indented name — #10 measured that borrowing descriptions onto deeper
+ * nodes costs more than dumping the whole corpus. A trailing slash marks a segment with no document of
+ * its own, and a count appears only at the depth boundary, where documents really are hidden.
+ */
+function renderNode(node: ListingNode, indent: string): string[] {
+	const count = node.hiddenCount > 0 ? ` (${node.hiddenCount})` : '';
+	const head =
+		node.descriptor === undefined
+			? `${indent}${node.segment}${node.isDocument ? '' : '/'}${count}`
+			: // A document that is also a branch earns a `below` badge only when the branch is not expanded.
+				renderLeaf(
+					node.segment,
+					node.descriptor,
+					node.hiddenCount > 0 ? [`${node.hiddenCount} below`] : []
+				);
+	return [head, ...node.children.flatMap((child) => renderNode(child, `${indent}  `))];
 }
 
 export function renderFind(result: FindResult): string {
@@ -66,7 +76,8 @@ export function renderFind(result: FindResult): string {
 			'Browse a shorter path_prefix, or search with a query. Add status to see drafts or deprecated documents.'
 		].join('\n');
 	}
-	return (header === '' ? '' : `${header}\n`) + result.nodes.map(renderNode).join('\n');
+	const body = result.nodes.flatMap((node) => renderNode(node, '')).join('\n');
+	return (header === '' ? '' : `${header}\n`) + body;
 }
 
 export function renderDocument(document: DocumentDetail): string {
